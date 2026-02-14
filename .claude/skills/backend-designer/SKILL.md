@@ -55,6 +55,7 @@ Always evaluate whether each needs updating for the current PRD:
 | 5   | `auth_specification.md`  | Authentication Flow            | Token strategy (JWT payloads, signing), password security (bcrypt, rules), auth flow diagrams, session lifecycle, security mechanisms                                                                                                       |
 | 6   | `cache_specification.md` | Cache Strategy                 | Cache items (key pattern/value/TTL/service), operations by feature (Redis commands), eviction policy, failure strategy                                                                                                                      |
 | 7   | `error_specification.md` | Error Handling                 | Error code registry (organized by ranges), gRPC error propagation, error handling guidelines, logging & observability                                                                                                                       |
+| 8   | `event_specification.md` | Event & Messaging Specification | Event catalog, Kafka topic definitions, event schemas (payload/versioning), producer & consumer contracts, delivery guarantees, retry & dead-letter policies, partitioning strategy, observability |
 
 > **New documents**: If the PRD requires a document type not listed above, propose it in Step 3 as a "New document" for user approval, and remind the user to update this SKILL.md with the new document's definition.
 
@@ -165,6 +166,27 @@ N+1. **Inter-Service Communication** — Table (caller, callee, RPC, when).
 4. **Error Handling Guidelines** — Sub-section per service layer with bulleted guidelines.
 5. **Logging & Observability** — Table of log levels and when to use them.
 
+### 8. `event_specification.md` Sections
+
+1. **Overview** — Document purpose and scope of event-driven communication in the system.
+2. **Message Broker** — Kafka cluster configuration table (setting, value, description), topic naming conventions, and environment-specific overrides.
+3. **Topic Registry** — Table of all Kafka topics (topic name, description, partition count, retention, cleanup policy).
+4. **Event Catalog** — Table of all events (topic, event type, producer, consumer, description).
+5. **Event Schemas** — Sub-section per event type (5.1, 5.2, ...). Each includes:
+   - Event type name and version
+   - JSON schema or proto definition in fenced code block
+   - Field table (field, type, required, description)
+   - Example payload in JSON code block
+   - Schema versioning notes (compatibility strategy: backward, forward, or full)
+6. **Producer & Consumer Contracts** — Sub-section per service (6.1, 6.2, ...). Each includes:
+   - Table of events produced (event type, topic, trigger condition)
+   - Table of events consumed (event type, topic, consumer group, processing description)
+   - Delivery guarantee (at-least-once, at-most-once, exactly-once)
+   - Idempotency strategy for consumers
+7. **Retry & Dead-Letter** — Retry policy table (topic, max retries, backoff strategy, initial delay, max delay), DLQ topic naming convention, DLQ processing guidelines.
+8. **Ordering & Partitioning** — Partition key strategy table (topic, partition key, ordering guarantee, rationale), ordering guarantees and trade-offs.
+9. **Observability** — Metrics table (metric name, type, labels, description), logging guidelines for event processing, alerting thresholds.
+
 ## Rules
 
 - **Iterative**: Never remove existing content unless the user explicitly requests it. Only add or modify.
@@ -187,8 +209,16 @@ Before finishing, verify:
 
 - [ ] Every REST API endpoint in `api_specification.md` has corresponding error codes in `error_specification.md`.
 - [ ] Every gRPC service/method in `grpc_specification.md` matches a service in `architecture.md`.
+- [ ] Every gRPC service error code in `grpc_specification.md` (X.3 sections) is registered in `error_specification.md`.
+- [ ] Every REST endpoint in `api_specification.md` that proxies to a backend service has a corresponding gRPC RPC method in `grpc_specification.md`.
 - [ ] Every database table referenced in any spec exists in `database_schema.md` with full DDL.
+- [ ] Every service in `database_schema.md` service ownership table exists in `architecture.md`.
 - [ ] Cache keys in `cache_specification.md` align with features described in other documents.
+- [ ] Auth flows in `auth_specification.md` reference valid API endpoints from `api_specification.md`, and session/token cache items match `cache_specification.md`.
+- [ ] All roles referenced in endpoint access levels in `api_specification.md` are defined in the RBAC role definitions (Section 7).
 - [ ] New services appear in the architecture diagram and communication patterns table in `architecture.md`.
 - [ ] Error code ranges in `error_specification.md` do not overlap with existing ranges.
 - [ ] All inter-service calls in sequence diagrams match the `grpc_specification.md` inter-service communication table.
+- [ ] Every Kafka topic referenced in sequence diagrams (`api_specification.md`) exists in the topic registry in `event_specification.md`.
+- [ ] Every event producer and consumer in `event_specification.md` matches a service defined in `architecture.md`.
+- [ ] Event error/failure scenarios reference valid error codes from `error_specification.md` where applicable.

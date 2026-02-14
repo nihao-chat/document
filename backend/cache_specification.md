@@ -146,3 +146,9 @@ This document defines the Redis caching strategy for nihao-chat backend services
 | Redis unavailable (idempotency) | Process request normally (fail-open); log warning — risk of duplicate processing     |
 | Key missing unexpectedly       | Treat as expired/invalid; require user to re-authenticate or re-request code          |
 | Redis connection timeout       | Retry once with 100ms timeout; if still failing, apply fail-open/fail-closed per item |
+
+## 6. Key Design
+
+### 6.1 Avoiding SCAN
+
+Avoid using `SCAN` in production request paths. All keys must be directly addressable; use index structures (Set, List) to track related keys.
