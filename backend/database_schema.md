@@ -54,9 +54,11 @@ erDiagram
 
 ## 3. Table Definitions
 
-### 3.1 users
+### 3.1 User DB (user-service)
 
-User accounts table. Owned by **user-service**.
+#### 3.1.1 users
+
+User accounts table.
 
 | Column     | Type                     | Nullable | Default           | Description                                       |
 | ---------- | ------------------------ | -------- | ----------------- | ------------------------------------------------- |
@@ -109,9 +111,9 @@ CREATE UNIQUE INDEX idx_users_phone ON users (phone) WHERE phone IS NOT NULL;
 CREATE INDEX idx_users_status ON users (status);
 ```
 
-### 3.2 user_profiles
+#### 3.1.2 user_profiles
 
-Extended profile information for users. Owned by **user-service**.
+Extended profile information for users.
 
 | Column     | Type                     | Nullable | Default  | Description                              |
 | ---------- | ------------------------ | -------- | -------- | ---------------------------------------- |
@@ -140,9 +142,11 @@ CREATE TABLE user_profiles (
 );
 ```
 
-### 3.3 credentials
+### 3.2 Auth DB (auth-service)
 
-Password credentials for users. Owned by **auth-service**.
+#### 3.2.1 credentials
+
+Password credentials for users.
 
 | Column        | Type                     | Nullable | Default  | Description                                  |
 | ------------- | ------------------------ | -------- | -------- | -------------------------------------------- |
@@ -168,9 +172,9 @@ CREATE TABLE credentials (
 );
 ```
 
-### 3.4 oauth_accounts
+#### 3.2.2 oauth_accounts
 
-Third-party OAuth account linkages. Owned by **auth-service**.
+Third-party OAuth account linkages.
 
 | Column           | Type                     | Nullable | Default             | Description                                    |
 | ---------------- | ------------------------ | -------- | ------------------- | ---------------------------------------------- |

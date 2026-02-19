@@ -1,8 +1,9 @@
 # Gateway REST API Specification
 
-| Date       | Description                                |
-| ---------- | ------------------------------------------ |
-| 2026-02-14 | FEAT-USER-001: User Account Management     |
+| Date       | Description                                                          |
+| ---------- | -------------------------------------------------------------------- |
+| 2026-02-20 | Update error translation to use Google standard error detail types   |
+| 2026-02-14 | FEAT-USER-001: User Account Management                               |
 
 ## 1. Overview
 
@@ -26,13 +27,33 @@ All API routes use the prefix `/api/v1/`. When a breaking change is required, a 
 
 All responses use the standard JSON envelope with `snake_case` field names:
 
-**Success Response:**
+```go
+type ErrorItem struct {
+    Field       string `json:"field,omitempty"`
+    Description string `json:"description,omitempty"`
+    Reason      string `json:"reason,omitempty"`
+}
+
+type Response struct {
+    Data      interface{} `json:"data,omitempty"`
+    Errors    []ErrorItem `json:"errors,omitempty"`
+    RequestID string      `json:"request_id"`
+}
+```
+
+**Success Response (with data):**
 
 ```json
 {
-  "code": 0,
   "data": { ... },
-  "msg": "success",
+  "request_id": "req-abc123"
+}
+```
+
+**Success Response (no data — e.g., logout, password change):**
+
+```json
+{
   "request_id": "req-abc123"
 }
 ```
@@ -41,19 +62,30 @@ All responses use the standard JSON envelope with `snake_case` field names:
 
 ```json
 {
-  "code": 1001,
-  "data": null,
-  "msg": "Invalid credentials",
+  "errors": [
+    {"reason": "Invalid credentials"}
+  ],
   "request_id": "req-abc123"
 }
 ```
 
-| Field        | Type     | Description                                |
-| ------------ | -------- | ------------------------------------------ |
-| `code`       | integer  | `0` for success, application error code otherwise |
-| `data`       | object / null | Response payload (null on error)       |
-| `msg`        | string   | Human-readable message                     |
-| `request_id` | string  | Unique request identifier for tracing      |
+**Error Response (field-level):**
+
+```json
+{
+  "errors": [
+    {"field": "identifier", "description": "Invalid email format"},
+    {"field": "password", "description": "Password must be at least 8 characters"}
+  ],
+  "request_id": "req-abc123"
+}
+```
+
+| Field        | Type              | Description                                              |
+| ------------ | ----------------- | -------------------------------------------------------- |
+| `data`       | object (omitempty) | Response payload; omitted on error or when no data       |
+| `errors`     | []ErrorItem (omitempty)     | Array of error items; BadRequest uses `field` + `description`, other errors use `reason`; omitted on success |
+| `request_id` | string            | Unique request identifier for tracing                    |
 
 ## 5. HTTP Status Code Usage
 
@@ -66,15 +98,45 @@ All responses use the standard JSON envelope with `snake_case` field names:
 | 403         | Forbidden                | Valid token but insufficient permissions                      |
 | 404         | Not Found                | Resource does not exist                                       |
 | 409         | Conflict                 | Duplicate resource or idempotency conflict                    |
-| 423         | Locked                   | Account locked due to failed login attempts                   |
 | 429         | Too Many Requests        | Rate limit exceeded                                           |
 | 500         | Internal Server Error    | Unexpected server failure                                     |
 | 503         | Service Unavailable      | Downstream service temporarily unavailable                    |
 | 504         | Gateway Timeout          | Request processing timed out                                  |
 
+### 5.1 gRPC-to-HTTP Error Translation
+
+The gateway translates gRPC errors to REST responses by:
+
+1. Mapping the gRPC status code to the appropriate HTTP status code (see table below)
+2. Extracting Google standard error detail types from the gRPC status to determine the `errors` field format
+
+**gRPC Status to HTTP Mapping:**
+
+| gRPC Status        | HTTP Status |
+| ------------------ | ----------- |
+| OK                 | 200         |
+| INVALID_ARGUMENT   | 400         |
+| UNAUTHENTICATED    | 401         |
+| PERMISSION_DENIED  | 403         |
+| NOT_FOUND          | 404         |
+| ALREADY_EXISTS     | 409         |
+| RESOURCE_EXHAUSTED | 429         |
+| INTERNAL           | 500         |
+| UNAVAILABLE        | 503         |
+| DEADLINE_EXCEEDED  | 504         |
+
+**Error Detail to `errors` Format:**
+
+| Condition                              | `errors` format                                      |
+| -------------------------------------- | ---------------------------------------------------- |
+| gRPC status contains `BadRequest` detail | Array — field violations mapped to `[{"field": "field_name", "description": "..."}, ...]` |
+| All other cases (ErrorInfo, ResourceInfo, etc. or no detail) | Array — `[{"reason": "the gRPC status message"}]`  |
+
 ## 6. Pagination
 
-List endpoints use cursor-based pagination:
+### 6.1 Cursor-Based Pagination
+
+Used for real-time or frequently updated lists (e.g., messages, notifications):
 
 | Parameter    | Type   | Description                                |
 | ------------ | ------ | ------------------------------------------ |
@@ -85,12 +147,33 @@ List endpoints use cursor-based pagination:
 
 ```json
 {
-  "code": 0,
   "data": {
     "items": [ ... ],
     "next_page_token": "eyJ..."
   },
-  "msg": "success",
+  "request_id": "req-abc123"
+}
+```
+
+### 6.2 Offset-Based Pagination
+
+Used for stable, sortable lists (e.g., admin user lists, search results):
+
+| Parameter   | Type    | Description                                |
+| ----------- | ------- | ------------------------------------------ |
+| `page`      | integer | Page number (1-based, default: 1)          |
+| `page_size` | integer | Number of items per page (default: 20, max: 100) |
+
+**Paginated Response:**
+
+```json
+{
+  "data": {
+    "items": [ ... ],
+    "total": 150,
+    "page": 2,
+    "page_size": 20
+  },
   "request_id": "req-abc123"
 }
 ```
@@ -175,9 +258,9 @@ Critical POST and PATCH operations should include the `x-idempotency-key` header
 
 ```json
 {
-  "code": 9003,
-  "data": null,
-  "msg": "Rate limit exceeded. Please try again later.",
+  "errors": [
+    {"reason": "Rate limit exceeded. Please try again later."}
+  ],
   "request_id": "req-abc123"
 }
 ```
@@ -210,22 +293,20 @@ Critical POST and PATCH operations should include the `x-idempotency-key` header
 
 ```json
 {
-  "code": 0,
   "data": {
     "expires_in": 600
   },
-  "msg": "Verification code sent",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 9002 | Invalid identifier format        |
-| 409         | 1003 | Identifier already registered    |
-| 429         | 1010 | Too many verification code requests |
+| HTTP Status | errors                      |
+| ----------- | ----------------------------------- |
+| 400         | Invalid identifier format           |
+| 409         | Identifier already registered       |
+| 429         | Too many verification code requests |
 
 **Sequence Diagram:**
 
@@ -247,7 +328,7 @@ sequenceDiagram
     AS->>R: SET verify:{identifier}:registration {code_hash, identifier_type, attempts: 0} EX 600
     AS->>K: Publish to notification.email / notification.sms
     AS-->>GW: Success
-    GW-->>C: 200 {code: 0, data: {expires_in: 600}}
+    GW-->>C: 200 {data: {expires_in: 600}}
 ```
 
 #### 11.1.2 Register
@@ -280,27 +361,25 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "user_id": "550e8400-e29b-41d4-a716-446655440000",
     "access_token": "eyJhbGciOiJSUzI1NiIs...",
     "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
     "expires_in": 900
   },
-  "msg": "Registration successful",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 1004 | Invalid verification code        |
-| 400         | 1006 | Password does not meet requirements |
-| 400         | 2002 | Invalid nickname                 |
-| 400         | 9002 | Validation error                 |
-| 409         | 1003 | Identifier already registered    |
+| HTTP Status | errors                      |
+| ----------- | ----------------------------------- |
+| 400         | Invalid verification code           |
+| 400         | Password does not meet requirements |
+| 400         | Invalid nickname                    |
+| 400         | Validation error                    |
+| 409         | Identifier already registered       |
 
 **Sequence Diagram:**
 
@@ -327,7 +406,7 @@ sequenceDiagram
     AS->>AS: Generate access + refresh tokens
     AS->>R: SET session:{user_id}:{token_id}
     AS-->>GW: Tokens + user_id
-    GW-->>C: 201 {code: 0, data: {user_id, tokens}}
+    GW-->>C: 201 {data: {user_id, tokens}}
 ```
 
 ### 11.2 Login
@@ -358,25 +437,23 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "user_id": "550e8400-e29b-41d4-a716-446655440000",
     "access_token": "eyJhbGciOiJSUzI1NiIs...",
     "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
     "expires_in": 900
   },
-  "msg": "Login successful",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 9002 | Validation error                 |
-| 401         | 1001 | Invalid credentials              |
-| 423         | 1002 | Account locked                   |
+| HTTP Status | errors      |
+| ----------- | ------------------- |
+| 400         | Validation error    |
+| 401         | Invalid credentials |
+| 403         | Account locked      |
 
 **Sequence Diagram:**
 
@@ -395,7 +472,7 @@ sequenceDiagram
     AS->>R: GET lockout:{identifier}
     alt Account locked
         AS-->>GW: ACCOUNT_LOCKED error
-        GW-->>C: 423 {code: 1002}
+        GW-->>C: 403 {"errors": [{"reason": "Account locked"}], "request_id": "..."}
     end
     AS->>US: gRPC GetUserByIdentifier
     US-->>AS: user data
@@ -404,13 +481,13 @@ sequenceDiagram
     alt Password incorrect
         AS->>R: HINCRBY lockout:{identifier} attempts 1
         AS-->>GW: INVALID_CREDENTIALS error
-        GW-->>C: 401 {code: 1001}
+        GW-->>C: 401 {"errors": [{"reason": "Invalid credentials"}], "request_id": "..."}
     end
     AS->>R: DEL lockout:{identifier}
     AS->>AS: Generate access + refresh tokens
     AS->>R: SET session:{user_id}:{token_id}
     AS-->>GW: Tokens + user_id
-    GW-->>C: 200 {code: 0, data: {user_id, tokens}}
+    GW-->>C: 200 {data: {user_id, tokens}}
 ```
 
 #### 11.2.2 Login with Google
@@ -437,7 +514,6 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "user_id": "550e8400-e29b-41d4-a716-446655440000",
     "access_token": "eyJhbGciOiJSUzI1NiIs...",
@@ -445,17 +521,16 @@ sequenceDiagram
     "expires_in": 900,
     "is_new_user": false
   },
-  "msg": "Login successful",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 9002 | Validation error                 |
-| 401         | 1009 | Google authentication failed     |
+| HTTP Status | errors                       |
+| ----------- | ------------------------------------ |
+| 400         | Validation error                     |
+| 401         | Google authentication failed         |
 
 **Sequence Diagram:**
 
@@ -490,7 +565,7 @@ sequenceDiagram
     AS->>AS: Generate access + refresh tokens
     AS->>R: SET session:{user_id}:{token_id}
     AS-->>GW: Tokens + user_id + is_new_user
-    GW-->>C: 200 {code: 0, data: {user_id, tokens, is_new_user}}
+    GW-->>C: 200 {data: {user_id, tokens, is_new_user}}
 ```
 
 #### 11.2.3 Login with Apple
@@ -519,7 +594,6 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "user_id": "550e8400-e29b-41d4-a716-446655440000",
     "access_token": "eyJhbGciOiJSUzI1NiIs...",
@@ -527,17 +601,16 @@ sequenceDiagram
     "expires_in": 900,
     "is_new_user": false
   },
-  "msg": "Login successful",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 9002 | Validation error                 |
-| 401         | 1009 | Apple authentication failed      |
+| HTTP Status | errors                      |
+| ----------- | ----------------------------------- |
+| 400         | Validation error                    |
+| 401         | Apple authentication failed         |
 
 **Sequence Diagram:**
 
@@ -572,7 +645,7 @@ sequenceDiagram
     AS->>AS: Generate access + refresh tokens
     AS->>R: SET session:{user_id}:{token_id}
     AS-->>GW: Tokens + user_id + is_new_user
-    GW-->>C: 200 {code: 0, data: {user_id, tokens, is_new_user}}
+    GW-->>C: 200 {data: {user_id, tokens, is_new_user}}
 ```
 
 ### 11.3 Token
@@ -601,24 +674,22 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "access_token": "eyJhbGciOiJSUzI1NiIs...",
     "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
     "expires_in": 900
   },
-  "msg": "Token refreshed",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 9002 | Validation error                 |
-| 401         | 1007 | Invalid token                    |
-| 401         | 1008 | Token expired                    |
+| HTTP Status | errors   |
+| ----------- | ---------------- |
+| 400         | Validation error |
+| 401         | Invalid token    |
+| 401         | Token expired    |
 
 **Sequence Diagram:**
 
@@ -635,13 +706,13 @@ sequenceDiagram
     AS->>R: GET session:{user_id}:{token_id}
     alt Session not found
         AS-->>GW: INVALID_TOKEN error
-        GW-->>C: 401 {code: 1007}
+        GW-->>C: 401 {"errors": [{"reason": "Invalid token"}], "request_id": "..."}
     end
     AS->>R: DEL session:{user_id}:{token_id}
     AS->>AS: Generate new access + refresh tokens
     AS->>R: SET session:{user_id}:{new_token_id}
     AS-->>GW: New tokens
-    GW-->>C: 200 {code: 0, data: {tokens}}
+    GW-->>C: 200 {data: {tokens}}
 ```
 
 ### 11.4 Logout
@@ -670,18 +741,15 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
-  "data": null,
-  "msg": "Logged out successfully",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 401         | 9004 | Unauthorized                     |
+| HTTP Status | errors |
+| ----------- | -------------- |
+| 401         | Unauthorized   |
 
 **Sequence Diagram:**
 
@@ -697,7 +765,7 @@ sequenceDiagram
     GW->>AS: gRPC Logout (user_id, token_id)
     AS->>R: DEL session:{user_id}:{token_id}
     AS-->>GW: Success
-    GW-->>C: 200 {code: 0, data: null}
+    GW-->>C: 200 {"request_id": "req-abc123"}
 ```
 
 ### 11.5 Password Management
@@ -728,21 +796,18 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
-  "data": null,
-  "msg": "Password changed successfully",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                                  |
-| ----------- | ---- | ------------------------------------ |
-| 400         | 1006 | Password does not meet requirements  |
-| 400         | 1011 | New password same as current         |
-| 401         | 1001 | Current password is incorrect        |
-| 401         | 9004 | Unauthorized                         |
+| HTTP Status | errors                      |
+| ----------- | ----------------------------------- |
+| 400         | Password does not meet requirements |
+| 400         | New password same as current        |
+| 401         | Current password is incorrect       |
+| 401         | Unauthorized                        |
 
 **Sequence Diagram:**
 
@@ -761,7 +826,7 @@ sequenceDiagram
     AS->>AS: bcrypt verify current password
     alt Current password incorrect
         AS-->>GW: INVALID_CREDENTIALS error
-        GW-->>C: 401 {code: 1001}
+        GW-->>C: 401 {"errors": [{"reason": "Current password is incorrect"}], "request_id": "..."}
     end
     AS->>AS: Validate new password strength
     AS->>AS: Hash new password with bcrypt
@@ -769,7 +834,7 @@ sequenceDiagram
     AS->>R: SMEMBERS user_sessions:{user_id}
     AS->>R: DEL other sessions + SREM from user_sessions:{user_id}
     AS-->>GW: Success
-    GW-->>C: 200 {code: 0, data: null}
+    GW-->>C: 200 {"request_id": "req-abc123"}
 ```
 
 #### 11.5.2 Send Password Reset Code
@@ -796,21 +861,19 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "expires_in": 600
   },
-  "msg": "If the account exists, a verification code has been sent",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                                      |
-| ----------- | ---- | ---------------------------------------- |
-| 400         | 9002 | Invalid identifier format                |
-| 429         | 1010 | Too many verification code requests      |
+| HTTP Status | errors                      |
+| ----------- | ----------------------------------- |
+| 400         | Invalid identifier format           |
+| 429         | Too many verification code requests |
 
 **Sequence Diagram:**
 
@@ -829,13 +892,13 @@ sequenceDiagram
     AS->>US: gRPC GetUserByIdentifier
     alt User not found
         AS-->>GW: Success (silent — no user enumeration)
-        GW-->>C: 200 {code: 0}
+        GW-->>C: 200 {data: {expires_in: 600}}
     end
     AS->>AS: Generate 6-digit code
     AS->>R: SET verify:{identifier}:password_reset {code_hash, identifier_type, attempts: 0} EX 600
     AS->>K: Publish to notification.email / notification.sms
     AS-->>GW: Success
-    GW-->>C: 200 {code: 0, data: {expires_in: 600}}
+    GW-->>C: 200 {data: {expires_in: 600}}
 ```
 
 #### 11.5.3 Reset Password
@@ -866,20 +929,17 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
-  "data": null,
-  "msg": "Password reset successful. Please log in with your new password.",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 1004 | Invalid verification code        |
-| 400         | 1006 | Password does not meet requirements |
-| 400         | 9002 | Validation error                 |
+| HTTP Status | errors                      |
+| ----------- | ----------------------------------- |
+| 400         | Invalid verification code           |
+| 400         | Password does not meet requirements |
+| 400         | Validation error                    |
 
 **Sequence Diagram:**
 
@@ -899,7 +959,7 @@ sequenceDiagram
     AS->>AS: Validate code (hash match, TTL not expired)
     alt Code invalid
         AS-->>GW: INVALID_VERIFICATION_CODE error
-        GW-->>C: 400 {code: 1004}
+        GW-->>C: 400 {"errors": [{"reason": "Invalid verification code"}], "request_id": "..."}
     end
     AS->>AS: Validate new password strength
     AS->>US: gRPC GetUserByIdentifier
@@ -909,7 +969,7 @@ sequenceDiagram
     AS->>R: SMEMBERS user_sessions:{user_id}
     AS->>R: DEL all sessions + DEL user_sessions:{user_id}
     AS-->>GW: Success
-    GW-->>C: 200 {code: 0, data: null}
+    GW-->>C: 200 {"request_id": "req-abc123"}
 ```
 
 ### 11.6 Profile Management
@@ -926,7 +986,6 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "user_id": "550e8400-e29b-41d4-a716-446655440000",
     "email": "user@example.com",
@@ -936,17 +995,16 @@ sequenceDiagram
     "bio": "Hello world!",
     "created_at": "2026-01-15T10:30:00Z"
   },
-  "msg": "success",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 401         | 9004 | Unauthorized                     |
-| 404         | 2001 | User not found                   |
+| HTTP Status | errors |
+| ----------- | -------------- |
+| 401         | Unauthorized   |
+| 404         | User not found |
 
 **Sequence Diagram:**
 
@@ -962,7 +1020,7 @@ sequenceDiagram
     GW->>US: gRPC GetUser (user_id)
     US->>UDB: SELECT users + user_profiles
     US-->>GW: User data + profile
-    GW-->>C: 200 {code: 0, data: {user profile}}
+    GW-->>C: 200 {data: {user profile}}
 ```
 
 #### 11.6.2 Update Current User Profile
@@ -991,25 +1049,23 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "user_id": "550e8400-e29b-41d4-a716-446655440000",
     "nickname": "NewNick",
     "bio": "Updated bio"
   },
-  "msg": "Profile updated",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 2002 | Invalid nickname                 |
-| 400         | 2003 | Bio exceeds maximum length       |
-| 401         | 9004 | Unauthorized                     |
-| 404         | 2001 | User not found                   |
+| HTTP Status | errors             |
+| ----------- | -------------------------- |
+| 400         | Invalid nickname           |
+| 400         | Bio exceeds maximum length |
+| 401         | Unauthorized               |
+| 404         | User not found             |
 
 **Sequence Diagram:**
 
@@ -1026,7 +1082,7 @@ sequenceDiagram
     US->>US: Validate nickname/bio constraints
     US->>UDB: UPDATE users / user_profiles
     US-->>GW: Updated data
-    GW-->>C: 200 {code: 0, data: {updated fields}}
+    GW-->>C: 200 {data: {updated fields}}
 ```
 
 #### 11.6.3 Get User Public Profile
@@ -1047,24 +1103,22 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "user_id": "550e8400-e29b-41d4-a716-446655440000",
     "nickname": "John",
     "avatar_url": "https://cdn.nihao.chat/avatars/550e8400.jpg",
     "bio": "Hello world!"
   },
-  "msg": "success",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 401         | 9004 | Unauthorized                     |
-| 404         | 2001 | User not found                   |
+| HTTP Status | errors |
+| ----------- | -------------- |
+| 401         | Unauthorized   |
+| 404         | User not found |
 
 **Sequence Diagram:**
 
@@ -1080,7 +1134,7 @@ sequenceDiagram
     GW->>US: gRPC GetProfile (target_user_id)
     US->>UDB: SELECT users + user_profiles (public fields)
     US-->>GW: Public profile data
-    GW-->>C: 200 {code: 0, data: {public profile}}
+    GW-->>C: 200 {data: {public profile}}
 ```
 
 ### 11.7 Avatar Management
@@ -1111,7 +1165,6 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
   "data": {
     "url": "https://s3.example.com/avatars",
     "fields": {
@@ -1123,18 +1176,17 @@ sequenceDiagram
       "x-amz-signature": "..."
     }
   },
-  "msg": "Presigned URL generated",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 400         | 2004 | Invalid avatar format            |
-| 400         | 2005 | Avatar too large                 |
-| 401         | 9004 | Unauthorized                     |
+| HTTP Status | errors        |
+| ----------- | --------------------- |
+| 400         | Invalid avatar format |
+| 400         | Avatar too large      |
+| 401         | Unauthorized          |
 
 **Sequence Diagram:**
 
@@ -1154,7 +1206,7 @@ sequenceDiagram
     S3-->>US: Presigned URL + fields
     US->>UDB: UPDATE user_profiles SET avatar_url
     US-->>GW: Presigned URL + fields
-    GW-->>C: 200 {code: 0, data: {url, fields}}
+    GW-->>C: 200 {data: {url, fields}}
     C->>S3: POST (multipart form upload using presigned fields)
 ```
 
@@ -1170,19 +1222,16 @@ sequenceDiagram
 
 ```json
 {
-  "code": 0,
-  "data": null,
-  "msg": "Avatar deleted",
   "request_id": "req-abc123"
 }
 ```
 
 **Error Responses:**
 
-| HTTP Status | Code | msg                              |
-| ----------- | ---- | -------------------------------- |
-| 401         | 9004 | Unauthorized                     |
-| 404         | 2006 | Avatar not found                 |
+| HTTP Status | errors   |
+| ----------- | ---------------- |
+| 401         | Unauthorized     |
+| 404         | Avatar not found |
 
 **Sequence Diagram:**
 
@@ -1200,12 +1249,12 @@ sequenceDiagram
     US->>UDB: SELECT avatar_url FROM user_profiles
     alt No avatar
         US-->>GW: AVATAR_NOT_FOUND error
-        GW-->>C: 404 {code: 2006}
+        GW-->>C: 404 {"errors": [{"reason": "Avatar not found"}], "request_id": "..."}
     end
     US->>S3: DELETE object
     US->>UDB: UPDATE user_profiles SET avatar_url = NULL
     US-->>GW: Success
-    GW-->>C: 200 {code: 0, data: null}
+    GW-->>C: 200 {"request_id": "req-abc123"}
 ```
 
 ## 12. Operational Endpoints

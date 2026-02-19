@@ -23,7 +23,7 @@ When the user invokes this skill with a PRD path (e.g., `requirements/feat-user-
 ### Step 2 — Read Existing Backend Docs
 
 1. Read **ALL** files in the `backend/` directory to understand the current state:
-   - Existing services, endpoints, schemas, error codes, cache keys, etc.
+   - Existing services, endpoints, schemas, error names, cache keys, etc.
 2. Note what already exists so you can extend rather than duplicate.
 
 ### Step 3 — Design & Plan
@@ -46,16 +46,15 @@ Present to the user:
 
 Always evaluate whether each needs updating for the current PRD:
 
-| #   | File                     | Title                          | Purpose                                                                                                                                                                                                                                     |
-| --- | ------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `architecture.md`        | Backend System Architecture    | System overview, services, infrastructure, architecture diagram, service responsibilities, communication patterns, security considerations                                                                                                  |
-| 2   | `api_specification.md`   | Gateway REST API Specification | REST endpoint definitions, request/response schemas, error responses, sequence diagrams, and cross-cutting API policies |
-| 3   | `grpc_specification.md`  | gRPC Service Specification     | Proto3 service/message definitions, common types, per-service error codes, inter-service communication table                                                                                                                                |
-| 4   | `database_schema.md`     | Database Schema                | ER diagram, table definitions (columns/types/constraints/indexes/DDL), service ownership, triggers                                                                                                                                          |
-| 5   | `auth_specification.md`  | Authentication Flow            | Token strategy (JWT payloads, signing), password security (bcrypt, rules), auth flow diagrams, session lifecycle, security mechanisms                                                                                                       |
-| 6   | `cache_specification.md` | Cache Strategy                 | Cache items (key pattern/value/TTL/service), operations by feature (Redis commands), eviction policy, failure strategy                                                                                                                      |
-| 7   | `error_specification.md` | Error Handling                 | Error code registry (organized by ranges), gRPC error propagation, error handling guidelines, logging & observability                                                                                                                       |
-| 8   | `event_specification.md` | Event & Messaging Specification | Event catalog, Kafka topic definitions, event schemas (payload/versioning), producer & consumer contracts, delivery guarantees, retry & dead-letter policies, partitioning strategy, observability |
+| #   | File                       | Title                           | Purpose                                                                                                                                                                                            |
+| --- | -------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `architecture.md`          | Backend System Architecture     | System overview, services, infrastructure, architecture diagram, service responsibilities, communication patterns, security considerations                                                         |
+| 2   | `gateway_specification.md` | Gateway REST API Specification  | REST endpoint definitions, request/response schemas, error responses, sequence diagrams, and cross-cutting API policies                                                                            |
+| 3   | `grpc_specification.md`    | gRPC Service Specification      | Proto3 service/message definitions, common types, per-service errors, inter-service communication table                                                                                            |
+| 4   | `database_schema.md`       | Database Schema                 | ER diagram, table definitions (columns/types/constraints/indexes/DDL), service ownership, triggers                                                                                                 |
+| 5   | `auth_specification.md`    | Authentication Flow             | Token strategy (JWT payloads, signing), password security (bcrypt, rules), auth flow diagrams, session lifecycle, security mechanisms                                                              |
+| 6   | `cache_specification.md`   | Cache Strategy                  | Cache items (key pattern/value/TTL/service), operations by feature (Redis commands), eviction policy, failure strategy                                                                             |
+| 7   | `event_specification.md`   | Event & Messaging Specification | Event catalog, Kafka topic definitions, event schemas (payload/versioning), producer & consumer contracts, delivery guarantees, retry & dead-letter policies, partitioning strategy, observability |
 
 > **New documents**: If the PRD requires a document type not listed above, propose it in Step 3 as a "New document" for user approval, and remind the user to update this SKILL.md with the new document's definition.
 
@@ -84,15 +83,16 @@ Changelog entries are **newest-first**. Each new PRD adds a row at the top of th
 5. **Service Responsibilities** — Sub-section per service with bulleted responsibilities.
 6. **Communication Patterns** — Table of inter-service communication (from, to, protocol, auth).
 7. **Security Considerations** — Bulleted list of security measures.
+8. **Logging & Observability** — Log level table (ERROR/WARN/INFO/DEBUG), logging rules (request_id, structured JSON, secret exclusion).
 
-### 2. `api_specification.md` Sections
+### 2. `gateway_specification.md` Sections
 
 1. **Overview** — Document purpose.
 2. **Versioning** — Route prefix convention (`/api/v1/...`).
 3. **Common Headers** — Table of HTTP headers (header, value, required, description).
-4. **Response Format** — All data exchange via JSON; use `snake_case` for JSON field names. Standard envelope: `{ "code": int, "data": interface{}, "msg": string, "request_id": string }`.
+4. **Response Format** — All data exchange via JSON; use `snake_case` for JSON field names. Standard envelope: `{ "data": interface{} (omitempty), "errors": []ErrorItem (omitempty), "request_id": string }` where `ErrorItem` has optional `field` (string), optional `description` (string, for `BadRequest` field violations), and optional `reason` (string, for other error types).
 5. **HTTP Status Code Usage** — Table (status code, meaning, used when).
-6. **Pagination** — List APIs must use pagination.
+6. **Pagination** — List APIs must use pagination. Use cursor-based (`page_token` + `page_size`) or offset-based (`page` + `page_size`) as appropriate.
 7. **Authentication & Authorization** — Public vs protected endpoint rules, RBAC role definitions (e.g., `admin`, `member`, `guest`), permission model, role-to-endpoint access matrix.
 8. **CORS Policy** — Allowed origins, methods, headers, credentials policy, preflight caching (`Access-Control-Max-Age`).
 9. **Idempotency** — Use `X-Idempotency-Key` for critical POST/PATCH operations.
@@ -105,7 +105,7 @@ Changelog entries are **newest-first**. Each new PRD adds a row at the top of th
 - Description
 - Request body with JSON example and field validation table
 - Success response with JSON example
-- Error responses table (HTTP status, code, msg)
+- Error responses table (HTTP status, errors)
 - Mermaid `sequenceDiagram`
 
 12. **Operational Endpoints** — Health check (`/healthz` liveness, `/ready` readiness) and metrics (`/metrics`) endpoint definitions, response formats, access level.
@@ -118,19 +118,18 @@ Changelog entries are **newest-first**. Each new PRD adds a row at the top of th
 3. **Naming Conventions** — File: `snake_case.proto`; Package: `domain.subdomain.v1`; Message: `PascalCase`; Field: `snake_case`; Enum names: `PascalCase`, values: `CAPS_SNAKE_CASE` with first value `UNKNOWN = 0`.
 4. **Request/Response** — Every RPC must have a unique `Request` and `Response` message. Message reuse across different RPCs is strictly prohibited.
 5. **Compatibility** — Never change field numbers. Use `reserved` for deprecated tags.
-6. **Pagination** — Use `page_token` and `page_size` (cursor-based) for List RPCs; avoid `offset`.
-7. **Error Handling** — Errors are returned via `google.golang.org/grpc/status` with Rich Error Model details.
+6. **Pagination** — List RPCs must use pagination. Use cursor-based (`page_token` + `page_size`) or offset-based (`page` + `page_size`) as appropriate.
+7. **Error Handling** — Errors use `google.golang.org/grpc/status` with Google standard detail types from `google/rpc/error_details.proto` (BadRequest, ErrorInfo, ResourceInfo, QuotaFailure, RetryInfo, DebugInfo). Includes status-to-detail-type mapping table and Go examples.
 8–N. **Per-Service Sections** — Each gRPC service occupies its own top-level numbered section (e.g., 8. Auth Service, 9. User Service). Each contains:
-   - **X.1 Service Definition** — File path and proto `service` block.
+   - **X.1 Service Definition** — File path and proto `service` block, followed by per-RPC subsections (#### RPCName) each with a description and error table (gRPC status, description).
    - **X.2 Message Definitions** — Proto `message` blocks grouped by feature.
-   - **X.3 Error Codes** — Table (gRPC status code, reason, detail type, description).
 N+1. **Inter-Service Communication** — Table (caller, callee, RPC, when).
 
 ### 4. `database_schema.md` Sections
 
 1. **Overview** — Document purpose.
 2. **ER Diagram** — Mermaid `erDiagram` with entities, fields, and relationships.
-3. **Table Definitions** — Sub-section per table (3.1, 3.2, ...). Each includes:
+3. **Table Definitions** — Grouped by database (3.1 User DB, 3.2 Auth DB, ...). Each database sub-section contains its tables, and each table includes:
    - Description
    - Column table (column, type, nullable, default, description)
    - Constraints list
@@ -156,17 +155,7 @@ N+1. **Inter-Service Communication** — Table (caller, callee, RPC, when).
 4. **Eviction & Memory Policy** — Table of Redis settings.
 5. **Failure Strategy** — Table of failure scenarios and behaviors.
 
-### 7. `error_specification.md` Sections
-
-1. **Overview** — Document purpose.
-2. **Error Code Registry**:
-   - **2.1 Code Range Allocation** — Table of ranges and categories.
-   - **2.2–2.N Per-Category** — Table per category (code, name, HTTP status, gRPC status, description).
-3. **gRPC Error Propagation** — Translation rules and mapping table.
-4. **Error Handling Guidelines** — Sub-section per service layer with bulleted guidelines.
-5. **Logging & Observability** — Table of log levels and when to use them.
-
-### 8. `event_specification.md` Sections
+### 7. `event_specification.md` Sections
 
 1. **Overview** — Document purpose and scope of event-driven communication in the system.
 2. **Message Broker** — Kafka cluster configuration table (setting, value, description), topic naming conventions, and environment-specific overrides.
@@ -197,7 +186,6 @@ N+1. **Inter-Service Communication** — Table (caller, callee, RPC, when).
 - **Naming conventions**:
   - `snake_case` for fields, columns, and proto message fields.
   - `kebab-case` for HTTP headers (e.g., `x-request-id`).
-  - `UPPER_CASE` for error code names (e.g., `INVALID_CREDENTIALS`).
   - `PascalCase` for proto service and message names.
 - **Diagrams**: All diagrams must use Mermaid syntax in fenced code blocks with `mermaid` language identifier.
 - **Language**: All backend documents are written in English.
@@ -207,18 +195,15 @@ N+1. **Inter-Service Communication** — Table (caller, callee, RPC, when).
 
 Before finishing, verify:
 
-- [ ] Every REST API endpoint in `api_specification.md` has corresponding error codes in `error_specification.md`.
+- [ ] Every REST API endpoint error in `gateway_specification.md` has a corresponding entry in `grpc_specification.md` (X.3 sections).
 - [ ] Every gRPC service/method in `grpc_specification.md` matches a service in `architecture.md`.
-- [ ] Every gRPC service error code in `grpc_specification.md` (X.3 sections) is registered in `error_specification.md`.
-- [ ] Every REST endpoint in `api_specification.md` that proxies to a backend service has a corresponding gRPC RPC method in `grpc_specification.md`.
+- [ ] Every REST endpoint in `gateway_specification.md` that proxies to a backend service has a corresponding gRPC RPC method in `grpc_specification.md`.
 - [ ] Every database table referenced in any spec exists in `database_schema.md` with full DDL.
 - [ ] Every service in `database_schema.md` service ownership table exists in `architecture.md`.
 - [ ] Cache keys in `cache_specification.md` align with features described in other documents.
-- [ ] Auth flows in `auth_specification.md` reference valid API endpoints from `api_specification.md`, and session/token cache items match `cache_specification.md`.
-- [ ] All roles referenced in endpoint access levels in `api_specification.md` are defined in the RBAC role definitions (Section 7).
+- [ ] Auth flows in `auth_specification.md` reference valid API endpoints from `gateway_specification.md`, and session/token cache items match `cache_specification.md`.
+- [ ] All roles referenced in endpoint access levels in `gateway_specification.md` are defined in the RBAC role definitions (Section 7).
 - [ ] New services appear in the architecture diagram and communication patterns table in `architecture.md`.
-- [ ] Error code ranges in `error_specification.md` do not overlap with existing ranges.
 - [ ] All inter-service calls in sequence diagrams match the `grpc_specification.md` inter-service communication table.
-- [ ] Every Kafka topic referenced in sequence diagrams (`api_specification.md`) exists in the topic registry in `event_specification.md`.
+- [ ] Every Kafka topic referenced in sequence diagrams (`gateway_specification.md`) exists in the topic registry in `event_specification.md`.
 - [ ] Every event producer and consumer in `event_specification.md` matches a service defined in `architecture.md`.
-- [ ] Event error/failure scenarios reference valid error codes from `error_specification.md` where applicable.

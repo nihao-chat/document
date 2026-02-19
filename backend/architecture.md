@@ -82,7 +82,7 @@ graph TB
 - Enforce rate limiting per endpoint and per IP
 - Parse client input to detect identifier type (email vs phone) and pass `identifier_type` + `identifier` downstream
 - Route requests to appropriate gRPC backend services
-- Return standardized JSON response envelopes to clients
+- Return standardized JSON response envelopes to clients (`data`/`errors`/`request_id`)
 - Handle CORS policy enforcement
 
 ### 5.2 auth-service
@@ -140,11 +140,30 @@ graph TB
 - Refresh tokens are stored server-side in Redis with 7-day TTL; not exposed in response bodies beyond initial issuance
 - Passwords are hashed with bcrypt before storage; plaintext passwords are never persisted or logged
 - Account lockout after 5 consecutive failed login attempts (15-minute lockout window) mitigates brute-force attacks
-- Rate limiting is enforced at the gateway layer to prevent abuse on sensitive endpoints (login, registration, password reset)
+- Rate limiting is enforced at the gateway layer on all API endpoints to prevent abuse
 - Inter-service communication uses mTLS or service mesh to prevent unauthorized internal access
 - Verification codes are 6-digit numeric with 10-minute expiry to limit the window for interception
 - Presigned POST URLs for avatar uploads enforce size limits (5 MB) and allowed content types (image/jpeg, image/png, image/webp)
 - Kafka connections use SASL/TLS for secure event transport
 - Database connections use TLS and credential-based authentication
 - All sessions are invalidated on password reset to prevent continued access with compromised credentials
-- Sensitive data (tokens, passwords, verification codes) is never included in application logs
+- The gateway never exposes internal error details (stack traces, internal IPs) to clients
+- Login error messages never disclose whether an identifier exists; all credential failures return `INVALID_CREDENTIALS`
+- Password reset send-code always returns success regardless of whether the identifier exists, preventing user enumeration
+
+## 8. Logging & Observability
+
+| Log Level | When to Use                                                                                 |
+| --------- | ------------------------------------------------------------------------------------------- |
+| ERROR     | Unexpected failures: database errors, external service failures, unhandled exceptions       |
+| WARN      | Expected but notable events: failed login attempts, rate limit hits, account lockouts       |
+| INFO      | Successful operations: user registered, login successful, password changed, token refreshed |
+| DEBUG     | Detailed processing information: request/response payloads (sanitized), cache hits/misses   |
+
+**Logging Rules:**
+
+- Every log entry must include `request_id`, `service`, and `timestamp`
+- Authentication logs must include `identifier` (hashed), `ip_address`, and `user_agent`
+- Never log passwords, tokens, verification codes, or other secrets in plaintext
+- Structured JSON logging format for all services
+- Log rotation and retention configured per environment
